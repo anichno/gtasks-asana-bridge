@@ -20,8 +20,9 @@ async fn main() -> Result<()> {
         .install_default()
         .unwrap();
 
-    let asana_token = std::env::var("ASANA_PAT")?;
-    let project_me_gid = std::env::var("PROJECT_ME_GID")?;
+    let asana_token = std::env::var("ASANA_PAT").context("ASANA_PAT env var missing")?;
+    let project_me_gid =
+        std::env::var("PROJECT_ME_GID").context("PROJECT_ME_GID env var missing")?;
 
     let asana_mgr = AsanaClient::new(&asana_token, &project_me_gid)?;
     let gtasks_mgr = GoogleTaskMgr::new().await?;
@@ -134,12 +135,12 @@ struct GoogleTaskMgr {
 
 impl GoogleTaskMgr {
     async fn new() -> Result<Self> {
-        let secret = read_application_secret("client_secret.json")
-            .await
-            .context("Failed to read client_secret.json")?;
+        let secret = google_tasks1::yup_oauth2::parse_application_secret(include_str!(
+            "../client_secret.json"
+        ))?;
 
         let auth =
-            InstalledFlowAuthenticator::builder(secret, InstalledFlowReturnMethod::HTTPRedirect)
+            InstalledFlowAuthenticator::builder(secret, InstalledFlowReturnMethod::Interactive)
                 .persist_tokens_to_disk("token_cache.json")
                 .build()
                 .await?;
