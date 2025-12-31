@@ -17,3 +17,10 @@ serde_json = { version = "1.0.148", default-features = false }
 tokio = { version = "1.48.0", features = [
     "rt-multi-thread",
 ], default-features = false }
+
+[features]
+default = []
+docker = []
+
+[profile.release]
+strip = true

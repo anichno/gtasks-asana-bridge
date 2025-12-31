@@ -16,6 +16,15 @@ async fn main() -> Result<()> {
     dotenv::dotenv().ok();
     env_logger::init();
 
+    if std::env::var("SLEEP_TO_CONFIG").is_ok() {
+        println!(
+            "SLEEP_TO_CONFIG env var set, sleeping. Please connect to console and manually run binary to configure OAuth"
+        );
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        }
+    }
+
     rustls::crypto::ring::default_provider()
         .install_default()
         .unwrap();
@@ -135,15 +144,28 @@ struct GoogleTaskMgr {
 
 impl GoogleTaskMgr {
     async fn new() -> Result<Self> {
-        let secret = google_tasks1::yup_oauth2::parse_application_secret(include_str!(
-            "../client_secret.json"
-        ))?;
+        #[cfg(not(feature = "docker"))]
+        const SECRET_PATH: &str = "client_secret.json";
+
+        #[cfg(feature = "docker")]
+        const SECRET_PATH: &str = "/secret/client_secret.json";
+
+        let secret = read_application_secret(SECRET_PATH)
+            .await
+            .context("failed to read application secret")?;
+
+        #[cfg(not(feature = "docker"))]
+        const TOKEN_PATH: &str = "token_cache.json";
+
+        #[cfg(feature = "docker")]
+        const TOKEN_PATH: &str = "/data/token_cache.json";
 
         let auth =
             InstalledFlowAuthenticator::builder(secret, InstalledFlowReturnMethod::Interactive)
-                .persist_tokens_to_disk("token_cache.json")
+                .persist_tokens_to_disk(TOKEN_PATH)
                 .build()
-                .await?;
+                .await
+                .context("failed to build auth")?;
 
         let client = google_tasks1::hyper_util::client::legacy::Client::builder(
             google_tasks1::hyper_util::rt::TokioExecutor::new(),
