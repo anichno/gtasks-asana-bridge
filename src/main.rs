@@ -4,9 +4,8 @@ use google_tasks1::{
     api::Task as GTask,
     yup_oauth2::{InstalledFlowAuthenticator, InstalledFlowReturnMethod, read_application_secret},
 };
-use jiff::{Timestamp, Zoned};
-use log::{debug, info};
-use serde::Deserialize;
+use jiff::Timestamp;
+use log::info;
 
 use crate::asana::AsanaClient;
 
@@ -31,8 +30,6 @@ async fn main() -> Result<()> {
         process_tasks(&asana_mgr, &gtasks_mgr).await?;
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
     }
-
-    Ok(())
 }
 
 async fn process_tasks(asana_mgr: &AsanaClient, gtasks_mgr: &GoogleTaskMgr) -> Result<()> {
@@ -47,13 +44,12 @@ async fn process_tasks(asana_mgr: &AsanaClient, gtasks_mgr: &GoogleTaskMgr) -> R
             .iter()
             .chain(google_tasks.complete.iter())
         {
-            if let Some(note) = &gtask.notes {
-                if let Some(asana_task_gid) = get_asana_task_gid_from_note(&note) {
-                    if atask.gid == asana_task_gid {
-                        matching_google_task = Some(gtask.clone());
-                        break;
-                    }
-                }
+            if let Some(note) = &gtask.notes
+                && let Some(asana_task_gid) = get_asana_task_gid_from_note(note)
+                && atask.gid == asana_task_gid
+            {
+                matching_google_task = Some(gtask.clone());
+                break;
             }
         }
 
@@ -90,14 +86,14 @@ async fn process_tasks(asana_mgr: &AsanaClient, gtasks_mgr: &GoogleTaskMgr) -> R
 
     // remove google completed tasks from asana
     for gtask in &google_tasks.complete {
-        if let Some(note) = &gtask.notes {
-            if let Some(asana_task_gid) = get_asana_task_gid_from_note(note) {
-                info!(
-                    "Google -> Asana task \"{}\" complete, completing in asana",
-                    gtask.title.as_ref().unwrap()
-                );
-                asana_mgr.complete_task(&asana_task_gid).await?;
-            }
+        if let Some(note) = &gtask.notes
+            && let Some(asana_task_gid) = get_asana_task_gid_from_note(note)
+        {
+            info!(
+                "Google -> Asana task \"{}\" complete, completing in asana",
+                gtask.title.as_ref().unwrap()
+            );
+            asana_mgr.complete_task(&asana_task_gid).await?;
         }
 
         // remove this google task
@@ -111,16 +107,15 @@ async fn process_tasks(asana_mgr: &AsanaClient, gtasks_mgr: &GoogleTaskMgr) -> R
     // remove asana completed tasks from google
     for atask in &asana_tasks.complete {
         for gtask in &google_tasks.incomplete {
-            if let Some(note) = &gtask.notes {
-                if let Some(asana_task_gid) = get_asana_task_gid_from_note(&note) {
-                    if atask.gid == asana_task_gid {
-                        info!(
-                            "Asana -> Google task \"{}\" complete, deleting in google",
-                            gtask.title.as_ref().unwrap()
-                        );
-                        gtasks_mgr.del_task(gtask.id.as_ref().unwrap()).await?;
-                    }
-                }
+            if let Some(note) = &gtask.notes
+                && let Some(asana_task_gid) = get_asana_task_gid_from_note(note)
+                && atask.gid == asana_task_gid
+            {
+                info!(
+                    "Asana -> Google task \"{}\" complete, deleting in google",
+                    gtask.title.as_ref().unwrap()
+                );
+                gtasks_mgr.del_task(gtask.id.as_ref().unwrap()).await?;
             }
         }
     }
@@ -189,21 +184,22 @@ impl GoogleTaskMgr {
     }
 
     async fn new_task_from_asana(&self, task: &asana::Task) -> Result<()> {
-        let mut new_g_task = GTask::default();
-        new_g_task.title = Some(task.name.clone());
-        new_g_task.due = Some(match (task.due_on, task.due_at) {
-            (None, None) => bail!("Somehow got to gtask with no due date"),
-            (None, Some(due_at)) => timestamp_to_local_date(due_at),
-            (Some(due_on), None) => format!("{}T00:00:00Z", due_on.to_string()),
-            (Some(_due_on), Some(due_at)) => timestamp_to_local_date(due_at),
-        });
-
-        new_g_task.notes = Some({
-            let mut note = task.notes.clone();
-            note.push_str("\n---\n");
-            note.push_str(&task.gid);
-            note
-        });
+        let new_g_task = GTask {
+            title: Some(task.name.clone()),
+            due: Some(match (task.due_on, task.due_at) {
+                (None, None) => bail!("Somehow got to gtask with no due date"),
+                (None, Some(due_at)) => timestamp_to_local_date(due_at),
+                (Some(due_on), None) => format!("{}T00:00:00Z", due_on),
+                (Some(_due_on), Some(due_at)) => timestamp_to_local_date(due_at),
+            }),
+            notes: Some({
+                let mut note = task.notes.clone();
+                note.push_str("\n---\n");
+                note.push_str(&task.gid);
+                note
+            }),
+            ..Default::default()
+        };
 
         self.hub
             .tasks()
@@ -276,7 +272,6 @@ fn timestamp_to_local_date(ts: Timestamp) -> String {
             .in_tz("America/Chicago")
             .unwrap()
             .date()
-            .to_string()
     )
 }
 
@@ -284,10 +279,10 @@ fn get_asana_task_gid_from_note(note: &str) -> Option<String> {
     let mut lines = note.lines();
 
     while let Some(line) = lines.next() {
-        if line == "---" {
-            if let Some(gid) = lines.next() {
-                return Some(gid.to_string());
-            }
+        if line == "---"
+            && let Some(gid) = lines.next()
+        {
+            return Some(gid.to_string());
         }
     }
 

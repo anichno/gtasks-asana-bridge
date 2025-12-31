@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use jiff::{Timestamp, ToSpan, Zoned, civil};
+use jiff::{Timestamp, ToSpan, civil};
 use reqwest::{
     Response,
     header::{AUTHORIZATION, HeaderMap, HeaderValue},
