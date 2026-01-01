@@ -15,5 +15,6 @@ COPY . .
 RUN cargo build --release --features docker
 
 FROM alpine
+RUN apk add tzdata
 COPY --from=builder /app/target/release/gtasks-asana-bridge /
 ENTRYPOINT [ "/gtasks-asana-bridge" ]
