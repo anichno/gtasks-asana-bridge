@@ -5,7 +5,7 @@ use google_tasks1::{
     yup_oauth2::{InstalledFlowAuthenticator, InstalledFlowReturnMethod, read_application_secret},
 };
 use jiff::Timestamp;
-use log::info;
+use log::{debug, info};
 
 use crate::asana::AsanaClient;
 
@@ -65,16 +65,7 @@ async fn process_tasks(asana_mgr: &AsanaClient, gtasks_mgr: &GoogleTaskMgr) -> R
 
         if let Some(google_task) = matching_google_task {
             // check if it needs updating, since asana might report different names or notes
-            let mut needs_updating = false;
-            if !asana_google_notes_same(atask, &google_task) {
-                // dbg!(&atask.notes, &google_task.notes);
-
-                needs_updating = true;
-            } else if google_task.title.unwrap() != atask.name {
-                needs_updating = true;
-            }
-
-            if needs_updating {
+            if !asana_google_same(atask, &google_task) {
                 info!(
                     "Asana -> Google task mismatch, updating google task (Asana: \"{}\")",
                     atask.name
@@ -209,12 +200,7 @@ impl GoogleTaskMgr {
     async fn new_task_from_asana(&self, task: &asana::Task) -> Result<()> {
         let new_g_task = GTask {
             title: Some(task.name.clone()),
-            due: Some(match (task.due_on, task.due_at) {
-                (None, None) => bail!("Somehow got to gtask with no due date"),
-                (None, Some(due_at)) => timestamp_to_local_date(due_at),
-                (Some(due_on), None) => format!("{}T00:00:00Z", due_on),
-                (Some(_due_on), Some(due_at)) => timestamp_to_local_date(due_at),
-            }),
+            due: Some(asana_due_to_string(task)?),
             notes: Some({
                 let mut note = task.notes.clone();
                 note.push_str("\n---\n");
@@ -312,16 +298,66 @@ fn get_asana_task_gid_from_note(note: &str) -> Option<String> {
     None
 }
 
-fn asana_google_notes_same(atask: &asana::Task, gtask: &GTask) -> bool {
-    if let Some(gtask_note) = &gtask.notes {
-        let lines = gtask_note.lines().take_while(|l| *l != "---");
+fn asana_due_to_string(atask: &asana::Task) -> Result<String> {
+    match (atask.due_on, atask.due_at) {
+        (None, None) => bail!("Somehow got to gtask with no due date"),
+        (None, Some(due_at)) => Ok(timestamp_to_local_date(due_at)),
+        (Some(due_on), None) => Ok(format!("{}T00:00:00Z", due_on)),
+        (Some(_due_on), Some(due_at)) => Ok(timestamp_to_local_date(due_at)),
+    }
+}
 
-        for (gtask_lines, atask_lines) in lines.zip(atask.notes.lines()) {
-            if gtask_lines != atask_lines {
+fn asana_google_same(atask: &asana::Task, gtask: &GTask) -> bool {
+    // Check title
+    match &gtask.title {
+        Some(gtask_title) => {
+            if gtask_title != &atask.name {
+                debug!(
+                    "name mismatch. Asana: \"{}\", Gtasks: \"{gtask_title}\"",
+                    atask.name
+                );
                 return false;
             }
         }
-        return true;
+        None => {
+            debug!("name mismatch. gtask has no name");
+            return false;
+        }
     }
-    false
+
+    // Check Due Time
+    match &gtask.due {
+        Some(gtask_due) => {
+            let gtask_due = gtask_due.replace(".000Z", "Z");
+            let asana_due = asana_due_to_string(atask).unwrap();
+            if gtask_due != asana_due {
+                debug!("due time mismatch. Asana: \"{asana_due}\", Gtasks: \"{gtask_due}\"");
+                return false;
+            }
+        }
+        None => {
+            debug!("due time mismatch. gtask has no due date");
+            return false;
+        }
+    }
+
+    // Check Notes Body
+    match &gtask.notes {
+        Some(gtask_notes) => {
+            let lines = gtask_notes.lines().take_while(|l| *l != "---");
+
+            for (gtask_lines, atask_lines) in lines.zip(atask.notes.lines()) {
+                if gtask_lines != atask_lines {
+                    debug!("notes mismatch. Asana: \"{atask_lines}\", Gtasks: \"{gtask_lines}\"");
+                    return false;
+                }
+            }
+        }
+        None => {
+            debug!("notes mismatch. gtask has no notes");
+            return false;
+        }
+    }
+
+    true
 }
