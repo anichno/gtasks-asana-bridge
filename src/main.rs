@@ -1,15 +1,10 @@
-use anyhow::{Context, Result, bail};
-use google_tasks1::{
-    TasksHub,
-    api::Task as GTask,
-    yup_oauth2::{InstalledFlowAuthenticator, InstalledFlowReturnMethod, read_application_secret},
-};
-use jiff::Timestamp;
+use anyhow::{Context, Result};
 use log::{debug, info};
 
-use crate::asana::AsanaClient;
+use crate::{asana::AsanaClient, google::GoogleTaskMgr};
 
 mod asana;
+mod google;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -54,8 +49,7 @@ async fn process_tasks(asana_mgr: &AsanaClient, gtasks_mgr: &GoogleTaskMgr) -> R
             .iter()
             .chain(google_tasks.complete.iter())
         {
-            if let Some(note) = &gtask.notes
-                && let Some(asana_task_gid) = get_asana_task_gid_from_note(note)
+            if let Some(asana_task_gid) = google::get_asana_task_gid(gtask)
                 && atask.gid == asana_task_gid
             {
                 matching_google_task = Some(gtask.clone());
@@ -87,9 +81,7 @@ async fn process_tasks(asana_mgr: &AsanaClient, gtasks_mgr: &GoogleTaskMgr) -> R
 
     // remove google completed tasks from asana
     for gtask in &google_tasks.complete {
-        if let Some(note) = &gtask.notes
-            && let Some(asana_task_gid) = get_asana_task_gid_from_note(note)
-        {
+        if let Some(asana_task_gid) = google::get_asana_task_gid(gtask) {
             info!(
                 "Google -> Asana task \"{}\" complete, completing in asana",
                 gtask.title.as_ref().unwrap()
@@ -108,8 +100,7 @@ async fn process_tasks(asana_mgr: &AsanaClient, gtasks_mgr: &GoogleTaskMgr) -> R
     // remove asana completed tasks from google
     for atask in &asana_tasks.complete {
         for gtask in &google_tasks.incomplete {
-            if let Some(note) = &gtask.notes
-                && let Some(asana_task_gid) = get_asana_task_gid_from_note(note)
+            if let Some(asana_task_gid) = google::get_asana_task_gid(gtask)
                 && atask.gid == asana_task_gid
             {
                 info!(
@@ -124,190 +115,7 @@ async fn process_tasks(asana_mgr: &AsanaClient, gtasks_mgr: &GoogleTaskMgr) -> R
     Ok(())
 }
 
-struct GoogleTaskMgr {
-    hub: TasksHub<
-        google_tasks1::hyper_rustls::HttpsConnector<
-            google_tasks1::hyper_util::client::legacy::connect::HttpConnector,
-        >,
-    >,
-    asana_task_list: String,
-}
-
-impl GoogleTaskMgr {
-    async fn new() -> Result<Self> {
-        #[cfg(not(feature = "docker"))]
-        const SECRET_PATH: &str = "client_secret.json";
-
-        #[cfg(feature = "docker")]
-        const SECRET_PATH: &str = "/secret/client_secret.json";
-
-        let secret = read_application_secret(SECRET_PATH)
-            .await
-            .context("failed to read application secret")?;
-
-        #[cfg(not(feature = "docker"))]
-        const TOKEN_PATH: &str = "token_cache.json";
-
-        #[cfg(feature = "docker")]
-        const TOKEN_PATH: &str = "/data/token_cache.json";
-
-        let auth =
-            InstalledFlowAuthenticator::builder(secret, InstalledFlowReturnMethod::Interactive)
-                .persist_tokens_to_disk(TOKEN_PATH)
-                .build()
-                .await
-                .context("failed to build auth")?;
-
-        let client = google_tasks1::hyper_util::client::legacy::Client::builder(
-            google_tasks1::hyper_util::rt::TokioExecutor::new(),
-        )
-        .build(
-            google_tasks1::hyper_rustls::HttpsConnectorBuilder::new()
-                .with_native_roots()
-                .unwrap()
-                .https_or_http()
-                .enable_http1()
-                .build(),
-        );
-        let hub = TasksHub::new(client, auth);
-
-        let lists = hub.tasklists().list().doit().await?.1;
-
-        let asana_task_list = lists
-            .items
-            .unwrap()
-            .iter()
-            .find(|a| {
-                if let Some(title) = &a.title
-                    && title == "Asana"
-                {
-                    true
-                } else {
-                    false
-                }
-            })
-            .unwrap()
-            .id
-            .clone()
-            .unwrap();
-
-        Ok(Self {
-            hub,
-            asana_task_list,
-        })
-    }
-
-    async fn new_task_from_asana(&self, task: &asana::Task) -> Result<()> {
-        let new_g_task = GTask {
-            title: Some(task.name.clone()),
-            due: Some(asana_due_to_string(task)?),
-            notes: Some({
-                let mut note = task.notes.clone();
-                note.push_str("\n---\n");
-                note.push_str(&task.gid);
-                note
-            }),
-            ..Default::default()
-        };
-
-        self.hub
-            .tasks()
-            .insert(new_g_task, &self.asana_task_list)
-            .doit()
-            .await?;
-        Ok(())
-    }
-
-    async fn get_tasks(&self) -> Result<GTaskResult> {
-        let mut result = GTaskResult {
-            incomplete: Vec::new(),
-            complete: Vec::new(),
-        };
-
-        let mut next_page: Option<String> = None;
-        loop {
-            let tasks_result = self
-                .hub
-                .tasks()
-                .list(&self.asana_task_list)
-                .max_results(100)
-                .show_completed(true)
-                .show_hidden(true);
-
-            let tasks_result = if let Some(page_token) = next_page {
-                tasks_result.page_token(&page_token).doit().await?
-            } else {
-                tasks_result.doit().await?
-            };
-
-            next_page = tasks_result.1.next_page_token;
-
-            for task in tasks_result.1.items.unwrap() {
-                if task.completed.is_some() {
-                    result.complete.push(task);
-                } else {
-                    result.incomplete.push(task);
-                }
-            }
-
-            if next_page.is_none() {
-                break;
-            }
-        }
-
-        Ok(result)
-    }
-
-    async fn del_task(&self, id: &str) -> Result<()> {
-        self.hub
-            .tasks()
-            .delete(&self.asana_task_list, id)
-            .doit()
-            .await?;
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-struct GTaskResult {
-    incomplete: Vec<GTask>,
-    complete: Vec<GTask>,
-}
-
-fn timestamp_to_local_date(ts: Timestamp) -> String {
-    format!(
-        "{}T00:00:00Z",
-        ts.to_zoned(jiff::tz::TimeZone::UTC)
-            .in_tz("America/Chicago")
-            .unwrap()
-            .date()
-    )
-}
-
-fn get_asana_task_gid_from_note(note: &str) -> Option<String> {
-    let mut lines = note.lines();
-
-    while let Some(line) = lines.next() {
-        if line == "---"
-            && let Some(gid) = lines.next()
-        {
-            return Some(gid.to_string());
-        }
-    }
-
-    None
-}
-
-fn asana_due_to_string(atask: &asana::Task) -> Result<String> {
-    match (atask.due_on, atask.due_at) {
-        (None, None) => bail!("Somehow got to gtask with no due date"),
-        (None, Some(due_at)) => Ok(timestamp_to_local_date(due_at)),
-        (Some(due_on), None) => Ok(format!("{}T00:00:00Z", due_on)),
-        (Some(_due_on), Some(due_at)) => Ok(timestamp_to_local_date(due_at)),
-    }
-}
-
-fn asana_google_same(atask: &asana::Task, gtask: &GTask) -> bool {
+fn asana_google_same(atask: &asana::Task, gtask: &google::Task) -> bool {
     // Check title
     match &gtask.title {
         Some(gtask_title) => {
@@ -329,7 +137,7 @@ fn asana_google_same(atask: &asana::Task, gtask: &GTask) -> bool {
     match &gtask.due {
         Some(gtask_due) => {
             let gtask_due = gtask_due.replace(".000Z", "Z");
-            let asana_due = asana_due_to_string(atask).unwrap();
+            let asana_due = asana::asana_due_to_string(atask).unwrap();
             if gtask_due != asana_due {
                 debug!("due time mismatch. Asana: \"{asana_due}\", Gtasks: \"{gtask_due}\"");
                 return false;

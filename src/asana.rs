@@ -140,3 +140,22 @@ struct UpdateTaskRequest {
 struct UpdateTaskData {
     completed: bool,
 }
+
+pub fn asana_due_to_string(atask: &Task) -> Result<String> {
+    match (atask.due_on, atask.due_at) {
+        (None, None) => bail!("Somehow got to gtask with no due date"),
+        (None, Some(due_at)) => Ok(timestamp_to_local_date(due_at)),
+        (Some(due_on), None) => Ok(format!("{}T00:00:00Z", due_on)),
+        (Some(_due_on), Some(due_at)) => Ok(timestamp_to_local_date(due_at)),
+    }
+}
+
+fn timestamp_to_local_date(ts: jiff::Timestamp) -> String {
+    format!(
+        "{}T00:00:00Z",
+        ts.to_zoned(jiff::tz::TimeZone::UTC)
+            .in_tz("America/Chicago")
+            .unwrap()
+            .date()
+    )
+}
