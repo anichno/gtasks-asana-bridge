@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 pub struct AsanaClient {
     client: reqwest::Client,
     headers: HeaderMap,
-    project_me: String,
+    project: String,
 }
 
 impl AsanaClient {
@@ -24,7 +24,7 @@ impl AsanaClient {
         Ok(Self {
             client: reqwest::Client::new(),
             headers,
-            project_me: project_me_gid.into(),
+            project: project_me_gid.into(),
         })
     }
 
@@ -64,7 +64,7 @@ impl AsanaClient {
 
         let tasks_url = format!(
             "https://app.asana.com/api/1.0/user_task_lists/{}/tasks?opt_fields=name,notes,due_on,due_at,completed_at&completed_since={past_day_ts}&limit=100",
-            self.project_me
+            self.project
         );
 
         let tasks_response = self.request_get(&tasks_url).await?;

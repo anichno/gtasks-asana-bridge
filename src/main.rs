@@ -25,10 +25,9 @@ async fn main() -> Result<()> {
         .unwrap();
 
     let asana_token = std::env::var("ASANA_PAT").context("ASANA_PAT env var missing")?;
-    let project_me_gid =
-        std::env::var("PROJECT_ME_GID").context("PROJECT_ME_GID env var missing")?;
+    let project_gid = std::env::var("PROJECT_GID").context("PROJECT_GID env var missing")?;
 
-    let asana_mgr = AsanaClient::new(&asana_token, &project_me_gid)?;
+    let asana_mgr = AsanaClient::new(&asana_token, &project_gid)?;
     let gtasks_mgr = GoogleTaskMgr::new().await?;
 
     loop {
