@@ -40,7 +40,7 @@ impl GoogleTaskMgr {
 
         let auth = google_tasks1::yup_oauth2::InstalledFlowAuthenticator::builder(
             secret,
-            google_tasks1::yup_oauth2::InstalledFlowReturnMethod::Interactive,
+            google_tasks1::yup_oauth2::InstalledFlowReturnMethod::HTTPRedirect,
         )
         .persist_tokens_to_disk(TOKEN_PATH)
         .build()
